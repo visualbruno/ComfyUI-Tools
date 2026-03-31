@@ -341,33 +341,81 @@ class Exporter():
         use_connect_unique_child: bool=True,
         extrude_from_parent: bool=True,
         tails: Union[ndarray, None]=None,
+        blender_exec_path: Union[str, None]=None,
     ):
         '''
-        Requires bpy installed
+        Exports FBX via Blender subprocess.
         '''
-        import bpy # type: ignore
+        import subprocess
+        import json
+        import tempfile
+        import uuid
+
+        if blender_exec_path is None:
+            raise RuntimeError("blender_exec_path is required for FBX export")
+
         self._safe_make_dir(path)
-        self._clean_bpy()
-        self._make_armature(
-            vertices=vertices,
-            joints=joints,
-            skin=skin,
-            parents=parents,
-            names=names,
-            faces=faces,
-            extrude_size=extrude_size,
-            group_per_vertex=group_per_vertex,
-            add_root=add_root,
-            do_not_normalize=do_not_normalize,
-            use_extrude_bone=use_extrude_bone,
-            use_connect_unique_child=use_connect_unique_child,
-            extrude_from_parent=extrude_from_parent,
-            tails=tails,
+
+        # Save array data to a temp npz file
+        uid = uuid.uuid4().hex[:8]
+        data_file = os.path.join(tempfile.gettempdir(), f'unirig_fbx_data_{uid}.npz')
+        save_dict = {'joints': joints}
+        if vertices is not None:
+            save_dict['vertices'] = vertices
+        if skin is not None:
+            save_dict['skin'] = skin
+        if faces is not None:
+            save_dict['faces'] = faces
+        if tails is not None:
+            save_dict['tails'] = tails
+        np.savez(data_file, **save_dict)
+
+        # Save scalar params to a temp JSON file
+        params = {
+            'data_file': data_file,
+            'path': os.path.abspath(path),
+            'names': [str(n) for n in names],
+            'parents': [p if p is not None else -1 for p in parents],
+            'extrude_size': extrude_size,
+            'group_per_vertex': group_per_vertex,
+            'add_root': add_root,
+            'do_not_normalize': do_not_normalize,
+            'use_extrude_bone': use_extrude_bone,
+            'use_connect_unique_child': use_connect_unique_child,
+            'extrude_from_parent': extrude_from_parent,
+        }
+        params_file = os.path.join(tempfile.gettempdir(), f'unirig_fbx_params_{uid}.json')
+        with open(params_file, 'w') as f:
+            json.dump(params, f)
+
+        # Locate the Blender export script
+        script_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+            'scripts'
         )
-        
-        # always enable add_leaf_bones to keep leaf bones
-        bpy.ops.export_scene.fbx(filepath=path, check_existing=False, add_leaf_bones=False)
-    
+        blender_script = os.path.join(script_dir, 'blender_export_fbx.py')
+
+        cmd = [
+            blender_exec_path,
+            '--background',
+            '--python', blender_script,
+            '--',
+            '--params_file', params_file,
+        ]
+        print(f"Running Blender FBX export: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+        print(result.stdout)
+        if result.returncode != 0:
+            print(f"Blender stderr: {result.stderr}")
+            raise RuntimeError(f"Blender FBX export failed with return code {result.returncode}")
+
+        # Clean up temp files
+        for tmp in [data_file, params_file]:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
     def _export_render(
         self,
         path: str,

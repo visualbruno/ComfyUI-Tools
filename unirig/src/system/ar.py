@@ -265,6 +265,7 @@ class ARWriter(BasePredictionWriter):
         self.export_obj         = kwargs.get('export_obj', None)
         self.export_fbx         = kwargs.get('export_fbx', None)
         self.export_pc          = kwargs.get('export_pc', None)
+        self.blender_exec_path  = kwargs.get('blender_exec_path', None)
         if order_config is not None:
             self.order = get_order(config=order_config)
         else:
@@ -349,9 +350,9 @@ class ARWriter(BasePredictionWriter):
                 raw_data.export_pc(path=make_path(self.export_pc, 'obj'))
             if self.export_fbx is not None:
                 if not self.user_mode:
-                    raw_data.export_fbx(path=make_path(self.export_fbx, 'fbx'))
+                    raw_data.export_fbx(path=make_path(self.export_fbx, 'fbx'), blender_exec_path=self.blender_exec_path)
                 else:
                     if self.output_name is not None:
-                        raw_data.export_fbx(path=self.output_name)
+                        raw_data.export_fbx(path=self.output_name, blender_exec_path=self.blender_exec_path)
                     else:
-                        raw_data.export_fbx(path=make_path(self.export_fbx, 'fbx', trim=True))
+                        raw_data.export_fbx(path=make_path(self.export_fbx, 'fbx', trim=True), blender_exec_path=self.blender_exec_path)

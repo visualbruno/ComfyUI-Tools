@@ -468,6 +468,126 @@ def extract_builtin(
     end_log()
     print(f"{tot} models processed")
 
+def extract_with_blender(
+    blender_exec_path: str,
+    output_folder: str,
+    target_count: int,
+    num_runs: int,
+    Id: int,
+    time: str,
+    files: List[Union[str, str]],
+):
+    import subprocess
+    import json
+    import tempfile
+
+    log_path = "./logs"
+    log_path = os.path.join(log_path, time)
+
+    num_files = len(files)
+    gap = num_files // num_runs
+    start = gap * Id
+    end = gap * (Id + 1)
+    if Id+1==num_runs:
+        end = num_files
+
+    files = sorted(files)
+    if end!=-1:
+        files = files[:end]
+    new_log(log_path, f"extract_builtin_{start}_{end}")
+
+    # Locate the Blender extraction script
+    script_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+        'scripts'
+    )
+    blender_script = os.path.join(script_dir, 'blender_extract.py')
+
+    # Write params to a temp JSON file
+    params = {
+        'files': [[f[0], f[1]] for f in files],
+    }
+    params_file = os.path.join(tempfile.gettempdir(), f'unirig_extract_params_{time}.json')
+    with open(params_file, 'w') as f:
+        json.dump(params, f)
+
+    # Run Blender in background mode
+    cmd = [
+        blender_exec_path,
+        '--background',
+        '--python', blender_script,
+        '--',
+        '--params_file', params_file,
+    ]
+    print(f"Running Blender: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+    print(result.stdout)
+    if result.returncode != 0:
+        print(f"Blender stderr: {result.stderr}")
+        raise RuntimeError(f"Blender extraction failed with return code {result.returncode}")
+
+    # Clean up params file
+    try:
+        os.remove(params_file)
+    except OSError:
+        pass
+
+    # Post-process: read intermediate data from Blender and run save_raw_data
+    tot = 0
+    for file in tqdm(files):
+        input_file = file[0]
+        output_dir = file[1]
+        intermediate_file = os.path.join(output_dir, '_blender_intermediate.npz')
+
+        if not os.path.exists(intermediate_file):
+            add_error(f"Intermediate file not found for {input_file}")
+            print(f"Error: Intermediate file not found for {input_file}")
+            continue
+
+        new_entry(input_file)
+        try:
+            with np.load(intermediate_file, allow_pickle=True) as data:
+                vertices = np.array(data['vertices'])
+                faces = np.array(data['faces'])
+                skin = np.array(data['skin']) if 'skin' in data else None
+                joints = np.array(data['joints']) if 'joints' in data else None
+                tails = np.array(data['tails']) if 'tails' in data else None
+                matrix_local = np.array(data['matrix_local']) if 'matrix_local' in data else None
+
+                parents = None
+                if 'parents' in data:
+                    parents_arr = np.array(data['parents'])
+                    parents = [int(p) if p != -1 else None for p in parents_arr]
+
+                names = None
+                if 'names' in data:
+                    names = list(data['names'])
+
+            save_file = os.path.join(output_dir, 'raw_data.npz')
+            save_raw_data(
+                path=save_file,
+                vertices=vertices,
+                faces=faces-1,
+                skin=skin,
+                joints=joints,
+                tails=tails,
+                parents=parents,
+                names=names,
+                matrix_local=matrix_local,
+                target_count=target_count,
+            )
+
+            # Clean up intermediate file (handle is closed by the with-block)
+            os.remove(intermediate_file)
+            tot += 1
+
+        except Exception as e:
+            add_error(f"Error post-processing {input_file}: {str(e)}")
+            print(f"Error post-processing {input_file}: {str(e)}")
+
+    end_log()
+    print(f"{tot} models processed")
+
 def str2bool(v):
     if isinstance(v, bool):
         return v

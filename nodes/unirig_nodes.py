@@ -17,7 +17,7 @@ from lightning.pytorch.strategies import FSDPStrategy, DDPStrategy
 from ..unirig.src.inference.download import download
 
 from ..unirig.src.data.asset import Asset
-from ..unirig.src.data.extract import get_files, extract_builtin
+from ..unirig.src.data.extract import get_files, extract_with_blender
 from ..unirig.src.data.dataset import UniRigDatasetModule, DatasetConfig, ModelInput
 from ..unirig.src.data.datapath import Datapath
 from ..unirig.src.data.transform import TransformConfig
@@ -46,7 +46,7 @@ def load(task: str, path: str) -> Box:
     print(f"\033[92mload {task} config: {path}\033[0m")
     return Box(yaml.safe_load(open(path, 'r')))
  
-def run_task(task,seed,input,input_dir,output,output_dir,npz_dir,cls,data_name): 
+def run_task(task,seed,input,input_dir,output,output_dir,npz_dir,cls,data_name,blender_exec_path=None): 
     torch.set_float32_matmul_precision('high')
     
     # parser = argparse.ArgumentParser()
@@ -190,6 +190,7 @@ def run_task(task,seed,input,input_dir,output,output_dir,npz_dir,cls,data_name):
             writer_config['output_dir'] = output_dir
             writer_config['output_name'] = output
             writer_config['user_mode'] = True
+        writer_config['blender_exec_path'] = blender_exec_path
         callbacks.append(get_writer(**writer_config, order_config=predict_transform_config.order_config))
     
     # get trainer
@@ -323,10 +324,11 @@ class VisualBrunoToolsUniRigSkeletonPrediction:
         return {
             "required": {
                 "pipeline": ("UNIRIG_PIPELINE",),
-                "seed": ("INT",),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0x7fffffff}),
                 "mesh_file":("STRING",),
                 "fbx_output_path":("STRING",),
                 "target_face_count":("INT",{"default":50000,"min":1,"max":10000000,"step":1}),
+                "blender_exec_path":("STRING",{"default":"C:\\Program Files\\Blender Foundation\\Blender 5.0\\blender.exe"}),
             },
         }
 
@@ -336,7 +338,7 @@ class VisualBrunoToolsUniRigSkeletonPrediction:
     CATEGORY = "VisualBrunoTools/UniRig"
     OUTPUT_NODE = True
 
-    def process(self, pipeline, seed, mesh_file, fbx_output_path, target_face_count,):       
+    def process(self, pipeline, seed, mesh_file, fbx_output_path, target_face_count,blender_exec_path,):       
         config_file = os.path.join(root_directory, 'unirig','configs','data','quick_inference.yaml')
         force_override="false"
         config = Box(yaml.safe_load(open(config_file, "r")))
@@ -356,7 +358,8 @@ class VisualBrunoToolsUniRigSkeletonPrediction:
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
         
-        extract_builtin(
+        extract_with_blender(
+            blender_exec_path=blender_exec_path,
             output_folder=output_path,
             target_count=target_face_count,
             num_runs=1,
@@ -370,7 +373,65 @@ class VisualBrunoToolsUniRigSkeletonPrediction:
         
         temp_dir = os.path.join(comfy_directory, "temp")
         
-        run_task(skeleton_task,seed,mesh_file,None,fbx_output_path,None,temp_dir,None,None)
+        run_task(skeleton_task,seed,mesh_file,None,output_path,None,temp_dir,None,None,blender_exec_path=blender_exec_path)
         
-        return (fbx_output_path,)
+        return (output_path,)
      
+     
+class VisualBrunoToolsUniRigSkinningWeightPrediction:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "pipeline": ("UNIRIG_PIPELINE",),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0x7fffffff}),
+                "skeleton_fbx_file":("STRING",),
+                "fbx_output_path":("STRING",),
+                "target_face_count":("INT",{"default":50000,"min":1,"max":10000000,"step":1}),
+                "blender_exec_path":("STRING",{"default":"C:\\Program Files\\Blender Foundation\\Blender 5.0\\blender.exe"}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", )
+    RETURN_NAMES = ("fbx_output_file", )
+    FUNCTION = "process"
+    CATEGORY = "VisualBrunoTools/UniRig"
+    OUTPUT_NODE = True
+
+    def process(self, pipeline, seed, skeleton_fbx_file, fbx_output_path, target_face_count,blender_exec_path,):       
+        config_file = os.path.join(root_directory, 'unirig','configs','data','quick_inference.yaml')
+        force_override="false"
+        config = Box(yaml.safe_load(open(config_file, "r")))
+        
+        output_path = os.path.join(comfy_directory,'output',fbx_output_path)
+        
+        #1 Extract data from skeleton_fbx_file
+        files = get_files(
+            data_name='raw_data.npz',
+            inputs=skeleton_fbx_file,
+            input_dataset_dir=None,
+            output_dataset_dir=output_path,
+            force_override=force_override,
+            warning=True,
+        )    
+        
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        
+        extract_with_blender(
+            blender_exec_path=blender_exec_path,
+            output_folder=output_path,
+            target_count=target_face_count,
+            num_runs=1,
+            Id=1,
+            time=timestamp,
+            files=files
+        )
+        
+        skin_task = os.path.join(root_directory,'unirig','configs','task','quick_inference_unirig_skin.yaml')
+        
+        temp_dir = os.path.join(comfy_directory, "temp")
+        
+        run_task(skin_task,seed,skeleton_fbx_file,None,output_path,None,temp_dir,None,"raw_data.npz",blender_exec_path=blender_exec_path)
+        
+        return (output_path,)     

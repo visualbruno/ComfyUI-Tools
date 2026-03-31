@@ -153,6 +153,7 @@ class RawData(Exporter):
         extrude_from_parent: bool=True,
         use_tail: bool=False,
         custom_vertex_group: Union[ndarray, None]=None,
+        blender_exec_path: Union[str, None]=None,
     ):
         '''
         export the whole model with skining
@@ -173,6 +174,7 @@ class RawData(Exporter):
             use_connect_unique_child=use_connect_unique_child,
             extrude_from_parent=extrude_from_parent,
             tails=self.tails if use_tail else None,
+            blender_exec_path=blender_exec_path,
         )
     
     def export_render(self, path: str, resolution: Tuple[int, int]=[256, 256]):
@@ -265,6 +267,7 @@ class RawSkeleton(Exporter):
         use_connect_unique_child: bool=True,
         extrude_from_parent: bool=True,
         use_tail: bool=False,
+        blender_exec_path: Union[str, None]=None,
     ):
         '''
         export the whole model with skining
@@ -285,6 +288,7 @@ class RawSkeleton(Exporter):
             use_connect_unique_child=use_connect_unique_child,
             extrude_from_parent=extrude_from_parent,
             tails=self.tails if use_tail else None,
+            blender_exec_path=blender_exec_path,
         )
     
     def export_render(self, path: str, resolution: Tuple[int, int]=[256, 256]):

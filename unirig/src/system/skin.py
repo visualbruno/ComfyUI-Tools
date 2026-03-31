@@ -191,6 +191,7 @@ class SkinWriter(BasePredictionWriter):
         self.add_num            = kwargs.get('add_num', False)
         self.export_npz         = kwargs.get('export_npz', True)
         self.export_fbx         = kwargs.get('export_fbx', False)
+        self.blender_exec_path  = kwargs.get('blender_exec_path', None)
         if order_config is not None:
             self.order = get_order(config=order_config)
         else:
@@ -302,6 +303,7 @@ class SkinWriter(BasePredictionWriter):
                         use_extrude_bone=False,
                         use_connect_unique_child=False,
                         # do_not_normalize=True,
+                        blender_exec_path=self.blender_exec_path,
                     )
                 except Exception as e:
                     print(str(e))

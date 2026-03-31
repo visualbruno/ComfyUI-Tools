@@ -4,6 +4,8 @@ from PIL import Image
 import ctypes
 import os
 import sys
+import copy
+import torch
 
 file_directory = os.path.dirname(os.path.abspath(__file__))
 libs_directory = os.path.join(os.path.dirname(os.path.dirname(__file__)),'libs')
@@ -511,3 +513,80 @@ class VisualBrunoToolsMeshSimplify:
         mesh.vertices = new_vertices
         
         return (mesh,)
+        
+class VisualBrunoToolsMeshSimplifyTrellis2:
+    
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mesh": ("MESHWITHVOXEL",),
+                "target_face_count": ("INT",{"default":100000,"min":1,"max":10000000,"step":1}),
+                "weld_vertices": ("BOOLEAN",{"default":True}),
+                "lock_border": ("BOOLEAN",{"default":True}),
+                "sparse": ("BOOLEAN",{"default":False}),
+                "error_absolute": ("BOOLEAN",{"default":False}),
+                "prune": ("BOOLEAN",{"default":False}),
+                "regularize": ("BOOLEAN",{"default":False}),
+                "permissive": ("BOOLEAN",{"default":False}),
+                "regularize_light": ("BOOLEAN",{"default":False}),
+            },
+        }
+    
+    RETURN_TYPES = ("MESHWITHVOXEL",)
+    RETURN_NAMES = ("mesh",)
+    FUNCTION = "process"
+    CATEGORY = "VisualBrunoTools/3d"
+    OUTPUT_NODE = True
+    
+    def process(
+        self,
+        mesh,
+        target_face_count,
+        weld_vertices,
+        lock_border,
+        sparse,
+        error_absolute,
+        prune,
+        regularize,
+        permissive,
+        regularize_light
+    ):
+        mesh_copy = copy.deepcopy(mesh)
+        
+        vertices = mesh_copy.vertices.cpu().numpy()
+        faces = mesh_copy.faces.cpu().numpy()
+        
+        print(f"Original: {len(vertices)} vertices, {len(faces)} faces")
+        
+        if weld_vertices:
+            welded_vertices, welded_faces = weld_mesh(vertices, faces)
+            print(f"Welded: {len(welded_vertices)} vertices, {len(welded_faces)} faces")
+        else:
+            welded_vertices = vertices
+            welded_faces = faces
+            
+        options = 0
+        if lock_border:
+            options = options | meshopt_SimplifyLockBorder
+        if sparse:
+            options = options | meshopt_SimplifySparse
+        if error_absolute:
+            options = options | meshopt_SimplifyErrorAbsolute
+        if prune:
+            options = options | meshopt_SimplifyPrune
+        if regularize:
+            options = options | meshopt_SimplifyRegularize
+        if permissive:
+            options = options | meshopt_SimplifyPermissive
+        if regularize_light:
+            options = options | meshopt_SimplifyRegularizeLight
+            
+        new_vertices, new_faces = simplify_mesh(welded_vertices, welded_faces, target_face_count=target_face_count, options = options)
+        
+        print(f"Simplified (after weld): {len(new_vertices)} vertices, {len(new_faces)} faces")
+        
+        mesh_copy.faces = torch.from_numpy(new_faces).float()
+        mesh_copy.vertices = torch.from_numpy(new_vertices).float()
+        
+        return (mesh_copy,)        
