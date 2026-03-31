@@ -274,6 +274,7 @@ def run_task(task,seed,input,input_dir,output,output_dir,npz_dir,cls,data_name):
         assert 0    
 
 class VisualBrunoToolsUniRigModelLoader:
+    @classmethod
     def INPUT_TYPES(s):
         return {}
         
