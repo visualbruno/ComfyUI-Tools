@@ -17,7 +17,7 @@ from lightning.pytorch.strategies import FSDPStrategy, DDPStrategy
 from ..unirig.src.inference.download import download
 
 from ..unirig.src.data.asset import Asset
-from ..unirig.src.data.extract import get_files
+from ..unirig.src.data.extract import get_files, extract_builtin
 from ..unirig.src.data.dataset import UniRigDatasetModule, DatasetConfig, ModelInput
 from ..unirig.src.data.datapath import Datapath
 from ..unirig.src.data.transform import TransformConfig
@@ -31,8 +31,9 @@ import time
 
 file_directory = os.path.dirname(os.path.abspath(__file__))
 scripts_directory = os.path.join(os.path.dirname(os.path.dirname(__file__)),'scripts')
-root_directory = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+root_directory = os.path.dirname(os.path.dirname(__file__))
 comfy_directory = os.path.dirname(os.path.dirname(root_directory))
+unirig_configs_directory = os.path.join(root_directory, 'unirig','configs')
 
 class FakePipeline:
     def __init():
@@ -91,13 +92,15 @@ def run_task(task,seed,input,input_dir,output,output_dir,npz_dir,cls,data_name):
     else:
         datapath = None
     
-    data_config = load('data', os.path.join('configs/data', task.components.data))
-    transform_config = load('transform', os.path.join('configs/transform', task.components.transform))
+    data_config = load('data', os.path.join(unirig_configs_directory,'data', task.components.data))
+    transform_config = load('transform', os.path.join(unirig_configs_directory,'transform', task.components.transform))
     
     # get tokenizer
     tokenizer_config = task.components.get('tokenizer', None)
     if tokenizer_config is not None:
-        tokenizer_config = load('tokenizer', os.path.join('configs/tokenizer', task.components.tokenizer))
+        tokenizer_config = load('tokenizer', os.path.join(unirig_configs_directory,'tokenizer', task.components.tokenizer))
+        tokenizer_config.order_config.skeleton_path.vroid = os.path.join(unirig_configs_directory,'skeleton','vroid.yaml')
+        tokenizer_config.order_config.skeleton_path.mixamo = os.path.join(unirig_configs_directory,'skeleton','mixamo.yaml')
         tokenizer_config = TokenizerConfig.parse(config=tokenizer_config)
     
     # get data name
@@ -123,6 +126,8 @@ def run_task(task,seed,input,input_dir,output,output_dir,npz_dir,cls,data_name):
     # get predict transform
     predict_transform_config = transform_config.get('predict_transform_config', None)
     if predict_transform_config is not None:
+        predict_transform_config.order_config.skeleton_path.vroid = os.path.join(unirig_configs_directory,'skeleton','vroid.yaml')
+        predict_transform_config.order_config.skeleton_path.mixamo = os.path.join(unirig_configs_directory,'skeleton','mixamo.yaml')        
         predict_transform_config = TransformConfig.parse(config=predict_transform_config)
         
     # get validate dataset
@@ -133,12 +138,14 @@ def run_task(task,seed,input,input_dir,output,output_dir,npz_dir,cls,data_name):
     # get validate transform
     validate_transform_config = transform_config.get('validate_transform_config', None)
     if validate_transform_config is not None:
+        validate_transform_config.order_config.skeleton_path.vroid = os.path.join(unirig_configs_directory,'skeleton','vroid.yaml')
+        validate_transform_config.order_config.skeleton_path.mixamo = os.path.join(unirig_configs_directory,'skeleton','mixamo.yaml')           
         validate_transform_config = TransformConfig.parse(config=validate_transform_config)
     
     # get model
     model_config = task.components.get('model', None)
     if model_config is not None:
-        model_config = load('model', os.path.join('configs/model', model_config))
+        model_config = load('model', os.path.join(unirig_configs_directory, 'model', model_config))
         if tokenizer_config is not None:
             tokenizer = get_tokenizer(config=tokenizer_config)
         else:
@@ -197,7 +204,7 @@ def run_task(task,seed,input,input_dir,output,output_dir,npz_dir,cls,data_name):
     # get system
     system_config = task.components.get('system', None)
     if system_config is not None:
-        system_config = load('system', os.path.join('configs/system', system_config))
+        system_config = load('system', os.path.join(unirig_configs_directory, 'system', system_config))
         system = get_system(
             **system_config,
             model=model,
@@ -319,6 +326,7 @@ class VisualBrunoToolsUniRigSkeletonPrediction:
                 "seed": ("INT",),
                 "mesh_file":("STRING",),
                 "fbx_output_path":("STRING",),
+                "target_face_count":("INT",{"default":50000,"min":1,"max":10000000,"step":1}),
             },
         }
 
@@ -328,14 +336,37 @@ class VisualBrunoToolsUniRigSkeletonPrediction:
     CATEGORY = "VisualBrunoTools/UniRig"
     OUTPUT_NODE = True
 
-    def process(self, pipeline, seed, mesh_file, fbx_output_path, ):       
-        config = os.path.join(root_directory, 'unirig','configs','data','quick_inference.yaml')
-        require_suffix="obj,fbx,FBX,dae,glb,gltf,vrm"
-        num_runs=1
+    def process(self, pipeline, seed, mesh_file, fbx_output_path, target_face_count,):       
+        config_file = os.path.join(root_directory, 'unirig','configs','data','quick_inference.yaml')
         force_override="false"
-        faces_target_count=50000
+        config = Box(yaml.safe_load(open(config_file, "r")))
+        
+        output_path = os.path.join(comfy_directory,'output',fbx_output_path)
+        
+        #1 Extract data from mesh_file
+        files = get_files(
+            data_name='raw_data.npz',
+            inputs=mesh_file,
+            input_dataset_dir=None,
+            output_dataset_dir=output_path,
+            force_override=force_override,
+            warning=True,
+        )    
+        
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        
+        extract_builtin(
+            output_folder=output_path,
+            target_count=target_face_count,
+            num_runs=1,
+            Id=1,
+            time=timestamp,
+            files=files,
+        )
+        
         skeleton_task = os.path.join(root_directory,'unirig','configs','task','quick_inference_skeleton_articulationxl_ar_256.yaml')
-        add_root="false"
+        #add_root="false"
         
         temp_dir = os.path.join(comfy_directory, "temp")
         

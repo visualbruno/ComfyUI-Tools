@@ -16,8 +16,12 @@ import os
 from .log import new_entry, add_error, add_warning, new_log, end_log
 from .raw_data import RawData
 
-def load(filepath: str):
+try:
     import bpy
+except:
+    print('bpy package not installed')
+
+def load(filepath: str):
     old_objs = set(bpy.context.scene.objects)
     
     if not os.path.exists(filepath):
@@ -81,7 +85,6 @@ def load(filepath: str):
 
 # remove all data in bpy
 def clean_bpy():
-    import bpy
     # First try to purge orphan data
     try:
         bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
@@ -142,7 +145,6 @@ def get_arranged_bones(armature):
     return arranged_bones
 
 def process_mesh(arranged_bones=None):
-    import bpy
     meshes = []
     for v in bpy.data.objects:
         if v.type == 'MESH':
@@ -282,7 +284,6 @@ def process_armature(
     armature,
     arranged_bones,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    import bpy
     matrix_world = armature.matrix_world
     index = {}
 
@@ -388,7 +389,7 @@ def extract_builtin(
     output_folder: str,
     target_count: int,
     num_runs: int,
-    id: int,
+    Id: int,
     time: str,
     files: List[Union[str, str]],
 ):
@@ -397,9 +398,9 @@ def extract_builtin(
 
     num_files = len(files)
     gap = num_files // num_runs
-    start = gap * id
-    end = gap * (id + 1)
-    if id+1==num_runs:
+    start = gap * Id
+    end = gap * (Id + 1)
+    if Id+1==num_runs:
         end = num_files
     
     files = sorted(files)
@@ -407,9 +408,10 @@ def extract_builtin(
         files = files[:end]
     new_log(log_path, f"extract_builtin_{start}_{end}")
     tot = 0
-    for file in tqdm(files[start:]):
+    for file in tqdm(files):
         input_file = file[0]
         output_dir = file[1]
+        print(input_file)
         clean_bpy()
         new_entry(input_file)
         try:
@@ -536,7 +538,7 @@ def parse():
     parser.add_argument('--faces_target_count', type=int, required=True)
     parser.add_argument('--num_runs', type=int, required=True)
     parser.add_argument('--force_override', type=str2bool, required=True)
-    parser.add_argument('--id', type=int, required=True)
+    parser.add_argument('--Id', type=int, required=True)
     parser.add_argument('--time', type=str, required=True)
 
     parser.add_argument('--input', type=nullable_string, required=False, default=None)
@@ -550,7 +552,7 @@ if __name__ == "__main__":
     config = Box(yaml.safe_load(open(args.config, "r")))
     
     num_runs        = args.num_runs
-    id              = args.id
+    Id              = args.Id
     timestamp       = args.time
     require_suffix  = args.require_suffix.split(',')
     force_override  = args.force_override
@@ -572,12 +574,14 @@ if __name__ == "__main__":
         force_override=force_override,
         warning=True,
     )
+    
+    print(files)
 
     extract_builtin(
         output_folder=config.output_dataset_dir,
         target_count=target_count,
         num_runs=num_runs,
-        id=id,
+        Id=Id,
         time=timestamp,
         files=files,
     )
