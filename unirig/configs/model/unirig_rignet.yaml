@@ -1,0 +1,30 @@
+__target__: unirig_ar
+llm:
+  pretrained_model_name_or_path: facebook/opt-350m
+  n_positions: 1024
+  max_position_embeddings: 1024
+  hidden_size: 512
+  word_embed_proj_dim: 512
+  do_layer_norm_before: True
+
+mesh_encoder:
+  __target__: michelangelo_encoder
+  freeze_encoder: False
+  device: cpu
+  dtype: float32
+  num_latents: 256
+  embed_dim: 64
+  point_feats: 3
+  num_freqs: 8
+  include_pi: False
+  heads: 16
+  width: 512
+  num_encoder_layers: 8
+  use_ln_post: True
+  init_scale: 0.25
+  qkv_bias: True
+  use_checkpoint: False
+  flash: True
+  supervision_type: occupancy
+  query_method: False
+  token_num: 512

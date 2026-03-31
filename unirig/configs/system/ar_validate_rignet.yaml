@@ -1,0 +1,7 @@
+__target__: ar
+record_res: False
+output_path: ./tmp/rignet
+generate_kwargs:
+  max_new_tokens: 1022
+  num_return_sequences: 1
+  do_sample: False

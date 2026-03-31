@@ -1,0 +1,18 @@
+mode: validate
+debug: False
+experiment_name: validate
+resume_from_checkpoint: experiments/skeleton/rignet/model.ckpt
+
+components:
+  data: rignet
+  tokenizer: tokenizer_rignet
+  transform: train_rignet_transform
+  model: unirig_rignet
+  system: ar_validate_rignet
+
+trainer:
+  num_nodes: 1
+  devices: 1
+  precision: bf16-mixed
+  accelerator: gpu
+  strategy: ddp

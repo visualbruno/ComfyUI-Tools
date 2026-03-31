@@ -1,0 +1,5 @@
+__target__: skin
+val_interval: 1
+val_start_from: 1
+output_path: tmp_skin
+record_res: True

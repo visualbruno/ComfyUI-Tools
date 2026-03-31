@@ -1,0 +1,30 @@
+sampler_config: &sampler_config
+  method: mix
+  num_samples: 65536
+  vertex_samples: 8192
+
+tail_config: &tail_config
+  copy_joint_to_tail: False # Be careful ! If tail is important, keep it False !!!
+  connect_tail_to_unique_son: True
+
+order_config: &order_config
+  skeleton_path:
+    vroid: ./configs/skeleton/vroid.yaml
+    mixamo: ./configs/skeleton/mixamo.yaml
+
+vertex_group_config: &vertex_group_config
+
+validate_transform_config: &validate_transform_config
+  augment_config:
+    augment_affine_config:
+      normalize_into: [-1.0, 1.0]
+      random_scale_p: 0.0
+      random_scale: [1.0, 1.0]
+      random_shift_p: 0.0
+      random_shift: [0.0, 0.0]
+  tail_config: *tail_config
+  order_config: *order_config
+  vertex_group_config: *vertex_group_config
+  sampler_config: *sampler_config
+
+predict_transform_config: *validate_transform_config

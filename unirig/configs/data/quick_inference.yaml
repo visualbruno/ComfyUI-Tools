@@ -1,0 +1,16 @@
+input_dataset_dir: &input_dataset_dir ./dataset_inference
+output_dataset_dir: &output_dataset_dir ./dataset_inference_clean
+
+predict_dataset_config:
+  shuffle: False
+  batch_size: 1
+  num_workers: 1
+  pin_memory: False
+  persistent_workers: False
+  datapath_config:
+    input_dataset_dir: *output_dataset_dir
+    use_prob: False
+    data_path:
+      inference: [
+        [./dataset_inference_clean/inference_datalist.txt, 1.0],
+      ]

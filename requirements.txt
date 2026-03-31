@@ -1,2 +1,5 @@
 python-box
 lightning
+fast_simplification
+torch_cluster
+torch_scatter

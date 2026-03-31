@@ -1,0 +1,14 @@
+method: tokenizer_part
+num_discrete: 256
+continuous_range: [-1, 1]
+cls_token_id:
+  vroid: 0
+  mixamo: 1 # this is currently untrained, do not use it
+  articulationxl: 2
+parts_token_id:
+  body: 0
+  hand: 1
+order_config:
+  skeleton_path:
+    vroid: ./configs/skeleton/vroid.yaml
+    mixamo: ./configs/skeleton/mixamo.yaml

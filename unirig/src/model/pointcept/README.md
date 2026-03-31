@@ -1,0 +1,1 @@
+original repo: https://github.com/Pointcept/SAMPart3D/tree/main
