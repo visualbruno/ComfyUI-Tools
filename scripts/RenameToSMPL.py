@@ -58,13 +58,23 @@ def get_finger_mapping(wrist_bone, side_prefix):
 def main():
     input_path = os.getenv('INPUT_MESH')
     output_path = os.getenv('OUTPUT_MESH')
+    output_type = os.getenv('OUTPUT_TYPE')
 
     if not input_path or not output_path:
         print("Error: Environment variables not set.")
         return
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.fbx(filepath=input_path)
+    
+    file_ext = os.path.splitext(input_path)[1].lower()
+    
+    if file_ext == '.fbx':
+        bpy.ops.import_scene.fbx(filepath=input_path)
+    elif file_ext in ['.glb', '.gltf']:
+        bpy.ops.import_scene.gltf(filepath=input_path)
+    else:
+        print(f"Error: Unsupported file extension '{file_ext}'. Please provide an .fbx, .glb, or .gltf file.")
+        return
     
     full_mapping = {}
     armature_obj = None
@@ -106,17 +116,28 @@ def main():
                     if slot.material:
                         slot.material.use_nodes = True
 
-    # --- UPDATED EXPORT FOR TEXTURES ---
-    bpy.ops.export_scene.fbx(
-        filepath=output_path,
-        use_selection=True,
-        add_leaf_bones=False,
-        bake_anim=True,
-        object_types={'ARMATURE', 'MESH'},
-        # These two settings are key for textures:
-        path_mode='COPY', 
-        embed_textures=True
-    )
+    if output_type == 'fbx':
+        bpy.ops.export_scene.fbx(
+            filepath=output_path,
+            use_selection=True,
+            add_leaf_bones=False,
+            bake_anim=True,
+            object_types={'ARMATURE', 'MESH'},
+            # These two settings are key for textures:
+            path_mode='COPY', 
+            embed_textures=True
+        )
+    elif output_type == 'glb':
+        bpy.ops.export_scene.gltf(
+            filepath=output_path,
+            export_format='GLB',
+            use_selection=True,
+            export_animations=True,
+            export_skins=True,
+            export_leaf_bone=False
+        )
+    else:
+        print(f"Unknown output type: {output_type}")
 
     print(f"Exported armature, mesh, and embedded textures to: {output_path}")
 

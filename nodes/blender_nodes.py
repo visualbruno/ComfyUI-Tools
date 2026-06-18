@@ -12,38 +12,39 @@ class VisualBrunoToolsFBXRenameToSMPL:
         return {
             "required": {
                 "fbx_file":("STRING",),
-                "fbx_output_path":("STRING",),
+                "mesh_output_path":("STRING",),
+                "output_file_type":(["fbx","glb"],{"default":"fbx"}),
+                "blender_exec_path":("STRING",),
             },
         }
 
     RETURN_TYPES = ("STRING", )
-    RETURN_NAMES = ("fbx_output_file", )
+    RETURN_NAMES = ("mesh_output_file", )
     FUNCTION = "process"
     CATEGORY = "VisualBrunoTools/Blender"
     OUTPUT_NODE = True
 
-    def process(self, fbx_file, fbx_output_path, ):        
-        blender_path = os.environ["BLENDER_EXE"]
-        
+    def process(self, fbx_file, mesh_output_path, output_file_type, blender_exec_path ):        
         env = os.environ.copy()
         env["INPUT_MESH"] = fbx_file
+        env["OUTPUT_TYPE"] = output_file_type
         
-        fbx_output_path = self.prepare_full_path(fbx_output_path, folder_paths.get_output_directory())
+        mesh_output_path = self.prepare_full_path(mesh_output_path, folder_paths.get_output_directory())
         
-        env["OUTPUT_MESH"] = fbx_output_path      
+        env["OUTPUT_MESH"] = mesh_output_path      
         
         script_path = os.path.join(scripts_directory,'RenameToSMPL.py')
         
         print('Running Blender ...')
         command = [
-            blender_path,
+            blender_exec_path,
             "-b",               # Run in background
             "--python", script_path
         ]
 
         subprocess.run(command, env=env)        
         
-        return (fbx_output_path,)
+        return (mesh_output_path,)
 
     def prepare_full_path(self, user_input, default_dir):
         clean_input = user_input.strip().strip('"').strip("'")
