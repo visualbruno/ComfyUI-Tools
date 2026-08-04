@@ -125,10 +125,11 @@ def project_texels_to_image(tex_pos, right, up, ortho_scale):
 # ---------------------------------------------------------------------------
 
 def texture_mesh_with_multiview(
-    mesh: trimesh.Trimesh,
+    high_poly_mesh: trimesh.Trimesh,
     images:     list,
     azimuths:   list,
     elevations: list,
+    view_weights: list = None,
     texture_size: int   = 4096,
     mesh_cluster_threshold_cone_half_angle_rad: float = 60.0,
     mesh_cluster_refine_iterations:  int   = 0,
@@ -140,13 +141,33 @@ def texture_mesh_with_multiview(
     fill_holes: bool = False,
     blend_texture: bool = True,
     max_hole_size: int = 10,
+    use_metallic: bool = True,
+    depth_eps: float = 0.002,
+    low_poly_mesh: trimesh.Trimesh = None,
+    add_alpha_channel: bool = False
 ):
+    if not (len(images) == len(azimuths) == len(elevations)):
+        raise ValueError("images, azimuths, and elevations must have the same length")
+        
     if not (len(images) == len(azimuths) == len(elevations)):
         raise ValueError("images, azimuths, and elevations must have the same length")
 
     num_views = len(images)
+
+    if view_weights is None:
+        view_weights = [1.0] * num_views
+
+    if len(view_weights) != num_views:
+        raise ValueError("view_weights must match number of images")        
+
+    num_views = len(images)
     print(f"[MultiView] {num_views} views | texture={texture_size} | ortho_scale={ortho_scale}")
 
+    if low_poly_mesh is not None:
+        mesh = low_poly_mesh
+    else:
+        mesh = high_poly_mesh
+        
     # =========================================================================
     # STEP 1 – UV unwrap
     # =========================================================================
@@ -245,36 +266,131 @@ def texture_mesh_with_multiview(
     acc_color  = torch.zeros(texture_size, texture_size, 3, device='cuda')
     acc_weight = torch.zeros(texture_size, texture_size, device='cuda')
 
-    for img, az, el in zip(images, azimuths, elevations):
+    for img, az, el, view_w in zip(images, azimuths, elevations, view_weights):
         img_np = np.array(img.convert('RGB')).astype(np.float32) / 255.0
         img_h, img_w = img_np.shape[:2]
+
+        # --- Dilate foreground colors into background to prevent bilinear bleed ---
+        img_rgba = img.convert('RGBA')
+        img_np_rgba = np.array(img_rgba)
+
+        # Build foreground mask
+        if img.mode != 'RGBA' or img_np_rgba[:, :, 3].min() == 255:
+            bg_color = img_np_rgba[0, 0, :3]
+            color_diff = np.abs(img_np_rgba[:, :, :3].astype(int) - bg_color.astype(int)).sum(axis=-1)
+            fg_mask = (color_diff > 10).astype(np.uint8)
+        else:
+            fg_mask = (img_np_rgba[:, :, 3] > 127).astype(np.uint8)
+
+        # Dilate the foreground mask and inpaint the background band
+        # Scale dilation with image resolution to prevent bilinear bleed
+        base_res = 2048
+        scale = max(img_h, img_w) / base_res
+        dilate_px = int(max(5, 5 * scale))
+        kernel = np.ones((3, 3), np.uint8)
+        dilated_fg = cv2.dilate(fg_mask, kernel, iterations=dilate_px)
+        band_to_fill = cv2.bitwise_and(dilated_fg, cv2.bitwise_not(fg_mask))
+
+        # Inpaint the color channels into the dilated band
+        img_rgb_u8 = (img_np * 255).clip(0, 255).astype(np.uint8)
+        if int(band_to_fill.sum()) > 0:
+            for c in range(3):
+                img_rgb_u8[..., c] = cv2.inpaint(img_rgb_u8[..., c], band_to_fill, 3, cv2.INPAINT_NS)
+        img_np = img_rgb_u8.astype(np.float32) / 255.0
+
         img_t = torch.from_numpy(img_np).cuda().permute(2, 0, 1).unsqueeze(0).contiguous()
 
         look, right, up = get_camera_vectors(az, el, device='cuda')
 
-        # Create occlusion map
+        # Create a moderately high-resolution occlusion map.
+        # Side views are especially sensitive to self-occlusion leaks where
+        # background/body texels can slip through around limbs.
+        occ_res = min(2048, img_h, img_w)
         cam_clip = build_ortho_clip_verts(out_verts, right, up, look, ortho_scale)
-        cam_rast, _ = dr.rasterize(ctx, cam_clip, out_faces.int(), resolution=[img_h, img_w])
-        cam_faceid_img = (cam_rast[0, :, :, 3].long() - 1).float().unsqueeze(0).unsqueeze(0)
+        
+        cam_rast, _ = dr.rasterize(ctx, cam_clip, out_faces.int(), resolution=[occ_res, occ_res])
+        cam_hit = cam_rast[0, :, :, 3] > 0
+        cam_hit_img = cam_hit.float().unsqueeze(0).unsqueeze(0)
 
-        # Map texels to camera
-        u_samp, v_samp, u_clip, v_clip = project_texels_to_image(tex_pos, right, up, ortho_scale)
+        # depth buffer
+        cam_depth = dr.interpolate(
+            (-(out_verts * look).sum(-1)).unsqueeze(0).unsqueeze(-1),
+            cam_rast,
+            out_faces.int()
+        )[0][0]
+
+        cam_depth = cam_depth.permute(2,0,1).unsqueeze(0)  # for grid_sample
+        inf_depth = torch.full_like(cam_depth, torch.finfo(cam_depth.dtype).max)
+        cam_depth_occ = torch.where(cam_hit.unsqueeze(0).unsqueeze(0), cam_depth, inf_depth)
+        cam_depth_occ = -F.max_pool2d(-cam_depth_occ, kernel_size=1, stride=1, padding=0)
+
+        # Map texels to camera clip space
+        _, _, u_clip, v_clip = project_texels_to_image(tex_pos, right, up, ortho_scale)
+
+        # Map mesh world-space bounds -> image pixel bounds
+        cam_clip_verts = cam_clip[0]
+        mesh_u_min = cam_clip_verts[:, 0].min()
+        mesh_u_max = cam_clip_verts[:, 0].max()
+        mesh_v_min = cam_clip_verts[:, 1].min()
+        mesh_v_max = cam_clip_verts[:, 1].max()
+
+        mesh_u_span = (mesh_u_max - mesh_u_min).clamp(min=1e-6)
+        mesh_v_span = (mesh_v_max - mesh_v_min).clamp(min=1e-6)
+
+        # Find character bounds in image using the foreground mask
+        coords = np.argwhere(fg_mask)
+        if len(coords) > 0:
+            y_min, x_min = coords.min(axis=0)
+            y_max, x_max = coords.max(axis=0)
+        else:
+            y_min, x_min = 0, 0
+            y_max, x_max = img_h - 1, img_w - 1
+
+        u_norm = (u_clip - mesh_u_min) / mesh_u_span
+        x_pixel = u_norm * float(x_max - x_min + 1) + float(x_min) - 0.5
+        u_samp = ((x_pixel + 0.5) / float(img_w)) * 2.0 - 1.0
+
+        v_norm = (v_clip - mesh_v_min) / mesh_v_span
+        y_pixel = (1.0 - v_norm) * float(y_max - y_min + 1) + float(y_min) - 0.5
+        v_samp = ((y_pixel + 0.5) / float(img_h)) * 2.0 - 1.0
+
+        # Prevent grid_sample from touching the border texel
+        eps = 1e-4
+        u_samp = u_samp.clamp(-1 + eps, 1 - eps)
+        v_samp = v_samp.clamp(-1 + eps, 1 - eps)
 
         # Occlusion check
         grid_occ = torch.stack([u_clip, v_clip], dim=-1).unsqueeze(0)
-        sampled_faceid = F.grid_sample(cam_faceid_img, grid_occ, mode='nearest', padding_mode='border', align_corners=True)[0, 0]
+        sampled_hit = F.grid_sample(
+            cam_hit_img,
+            grid_occ,
+            mode='nearest',
+            padding_mode='zeros',
+            align_corners=False
+        )[0, 0] > 0.10
+        
+        sampled_depth = F.grid_sample(
+            cam_depth_occ,
+            grid_occ,
+            mode='bilinear',
+            padding_mode='border',
+            align_corners=False
+        )[0,0]
+
+        tex_depth = -(tex_pos * look).sum(-1)
+
+        depth_match = tex_depth >= sampled_depth - depth_eps
         
         # Visibility Mask
-        in_bounds = (u_clip.abs() <= 1.0) & (v_clip.abs() <= 1.0)
-        face_match = (sampled_faceid.long() == tex_face_id)
-        visible = uv_hit_mask & in_bounds & face_match
+        in_bounds = (u_samp.abs() <= 1.0) & (v_samp.abs() <= 1.0)
+        visible = uv_hit_mask & in_bounds & sampled_hit & depth_match
 
         # Weighting and Accumulation
         grid_col = torch.stack([u_samp, v_samp], dim=-1).unsqueeze(0)
-        sampled_colors = F.grid_sample(img_t, grid_col, mode='bilinear', padding_mode='border', align_corners=True)[0].permute(1, 2, 0)
+        sampled_colors = F.grid_sample(img_t, grid_col, mode='bilinear', padding_mode='border', align_corners=False)[0].permute(1, 2, 0)
         
-        dot = (tex_normals * (-look)).sum(-1).clamp(min=0.0)
-        weights = (dot ** blend_exponent) * visible.float()
+        dot = (tex_normals * (-look)).sum(-1).clamp(min=0.0) ** 1.5
+        weights = (dot ** blend_exponent) * visible.float() * view_w
 
         acc_color += sampled_colors * weights.unsqueeze(-1)
         acc_weight += weights
@@ -299,13 +415,27 @@ def texture_mesh_with_multiview(
     # This prevents near-black grazing-angle texels from overwriting the original.
     # Threshold is relative to the maximum accumulated weight in the texture,
     # so it adapts automatically regardless of blend_exponent or number of views.
-    weight_threshold = acc_weight.max() * 0.05   # 5% of peak weight
-    composite_mask = acc_weight > weight_threshold.clamp(min=0.01)
+    # ------------------------------------------------------------------
+    # Compute confidence from accumulated weights
+    # ------------------------------------------------------------------
+
+    max_w = acc_weight.max().clamp(min=1e-6)
+
+    # Normalize weights
+    confidence = acc_weight / max_w
+
+    # Smoothstep curve (removes harsh edges)
+    confidence = confidence * confidence * (3.0 - 2.0 * confidence)
+
+    # Optional: boost confident projections
+    confidence = confidence ** 0.5
+
+    confidence3 = confidence.unsqueeze(-1)
 
     #-- Load and resample the existing PBR base color texture ----------------
     existing_base = None
     try:
-        mat = mesh.visual.material
+        mat = high_poly_mesh.visual.material
         existing_base = getattr(mat, 'baseColorTexture', None)
         if existing_base is None:
             # Fallback: try accessing via image attribute (SimpleMaterial / PBRMaterial variants)
@@ -331,12 +461,37 @@ def texture_mesh_with_multiview(
         # color fully. Where it didn't, keep the original texture untouched.
         # The normal-based weighting already handles per-view confidence during
         # accumulation, so no additional blending factor is needed here.
-        mask3 = composite_mask.unsqueeze(-1)   # (H, W, 1) bool
-        blended_rgb = torch.where(mask3, projected_color, existing_rgb)
+        # blended_rgb = (
+            # projected_color * confidence3 +
+            # existing_rgb * (1.0 - confidence3)
+        # )
+        
+        # Hard composite: use projected colour only where:
+        #   - the texel lies inside a UV island (uv_hit_mask)
+        #   - the accumulated projection weight is above a tiny fraction of the max weight
+        conf_threshold = 0.1
+        hard_mask = uv_hit_mask & (confidence > conf_threshold)
+
+        # Keep original texture wherever the mask is False
+        blended_rgb = torch.where(hard_mask.unsqueeze(-1), projected_color, existing_rgb)
+
+        composite_mask = hard_mask  # for the reporting print below        
+
+        #composite_mask = confidence > 0.01
 
         color_np = (blended_rgb.cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
-        # Preserve the original alpha everywhere (mesh already has full coverage)
-        alpha_np = (existing_alpha.squeeze(-1).cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+        
+        # Alpha from projection confidence
+        conf_np = confidence.cpu().numpy()        
+        
+        if add_alpha_channel:
+            uv_mask_np = uv_hit_mask.cpu().numpy()
+            alpha_np = np.zeros((texture_size, texture_size), dtype=np.uint8)
+            alpha_np[uv_mask_np] = (conf_np[uv_mask_np] * 255).clip(0, 255).astype(np.uint8)
+            alpha_np[conf_np <= 0.01] = 0
+        else:            
+            # Preserve the original alpha everywhere (mesh already has full coverage)
+            alpha_np = (existing_alpha.squeeze(-1).cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
 
         n_projected = int(composite_mask.sum().item())
         print(f"  Projected texels: {n_projected} / {texture_size*texture_size}"
@@ -344,10 +499,31 @@ def texture_mesh_with_multiview(
 
     else:
         # No existing texture found – fall back to projection-only output
-        print("  WARNING: No existing PBR baseColorTexture found on mesh, "
-              "outputting projection-only texture (holes will be transparent).")
+        print(
+            "  WARNING: No existing PBR baseColorTexture found on mesh, "
+            "outputting projection-only texture (holes will be transparent)."
+        )
+
+        # RGB from projection
         color_np = (projected_color.cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
-        alpha_np = composite_mask.cpu().numpy().astype(np.uint8) * 255
+
+        # Alpha from projection confidence
+        conf_np = confidence.cpu().numpy()
+
+        if add_alpha_channel:
+            # Use UV mask for proper transparent background
+            uv_mask_np = uv_hit_mask.cpu().numpy()
+
+            alpha_np = np.zeros((texture_size, texture_size), dtype=np.uint8)
+
+            alpha_np[uv_mask_np] = (conf_np[uv_mask_np] * 255).clip(0, 255).astype(np.uint8)
+            alpha_np[conf_np <= 0.01] = 0
+        else:
+            # Slight threshold to remove noise
+            alpha_mask = conf_np > 0.01
+
+            alpha_np = (conf_np * 255).clip(0, 255).astype(np.uint8)
+            alpha_np[~alpha_mask] = 0
 
     if fill_holes:
         print('Filling holes and padding UV seams ...')
@@ -389,49 +565,7 @@ def texture_mesh_with_multiview(
         if (n_holes + n_pad) > 0:
             for c in range(3):
                 color_np[..., c] = cv2.inpaint(color_np[..., c], final_inpaint_mask, 3, cv2.INPAINT_NS)
-            alpha_np = cv2.inpaint(alpha_np, final_inpaint_mask, 3, cv2.INPAINT_NS)
-            
-    # if fill_holes:
-        # print('Filling holes ...')
-        
-        # # 1. Get the raw mask of all holes (1 for hole, 0 for valid)
-        # raw_hole_mask = (~valid_mask.cpu().numpy()).astype(np.uint8)
-        
-        # # 2. Filter by size if a limit is set
-        # if max_hole_size > 0:
-            # filtered_hole_mask = np.zeros_like(raw_hole_mask)
-            # # Find connected components (connectivity=8 handles diagonals)
-            # num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(raw_hole_mask, connectivity=8)
-            
-            # print(f"Num Labels: {num_labels}")
-            # # Label 0 is the background (non-holes), so we start checking from Label 1
-            
-            # if num_labels>0:
-                # progress_bar = tqdm(total=num_labels, desc="Filling holes")
-                
-                # for label_id in range(1, num_labels):
-                    # area = stats[label_id, cv2.CC_STAT_AREA]
-                    # if area <= max_hole_size:
-                        # # If the hole is small enough, add it to our filtered mask
-                        # filtered_hole_mask[labels == label_id] = 1
-                    # progress_bar.update(1)
-                
-                # progress_bar.close()
-                
-                # print(f"Number of filtered holes: {len(filtered_hole_mask)}")
-                
-            # hole_mask = filtered_hole_mask
-        # else:
-            # hole_mask = raw_hole_mask
-
-        # n_holes = int(hole_mask.sum())
-        # print(f"  Inpainting {n_holes} hole texels ({100.0*n_holes/hole_mask.size:.1f}%)...")
-
-        # if n_holes > 0:
-            # for c in range(3):
-                # color_np[..., c] = cv2.inpaint(color_np[..., c], hole_mask, 3, cv2.INPAINT_NS)
-            # alpha_np = cv2.inpaint(alpha_np, hole_mask, 3, cv2.INPAINT_NS)          
-        
+            alpha_np = cv2.inpaint(alpha_np, final_inpaint_mask, 3, cv2.INPAINT_NS)      
 
     # =========================================================================
     # STEP 5 – Build output textures and trimesh
@@ -439,11 +573,11 @@ def texture_mesh_with_multiview(
     baseColorTexture = Image.fromarray(np.dstack([color_np, alpha_np]))
     metallicRoughnessTexture = None
     
-    if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material') and isinstance(mesh.visual.material, trimesh.visual.material.PBRMaterial):
-        if mesh.visual.material.metallicRoughnessTexture:
-            metallicRoughnessTexture = mesh.visual.material.metallicRoughnessTexture
+    if hasattr(high_poly_mesh, 'visual') and hasattr(high_poly_mesh.visual, 'material') and isinstance(high_poly_mesh.visual.material, trimesh.visual.material.PBRMaterial):
+        if high_poly_mesh.visual.material.metallicRoughnessTexture:
+            metallicRoughnessTexture = high_poly_mesh.visual.material.metallicRoughnessTexture
             
-    if metallicRoughnessTexture is None:
+    if metallicRoughnessTexture is None or not use_metallic:
         mr_np = np.zeros((texture_size, texture_size, 3), dtype=np.uint8)
         mr_np[..., 1] = 230
         metallicRoughnessTexture = Image.fromarray(mr_np)

@@ -298,11 +298,15 @@ class VisualBrunoToolsProjectionMultiViewTexturing:
                 "trimesh": ("TRIMESH",),
                 "texture_size": ("INT", {"default": 4096, "min": 512, "max": 8192}),
                 "blend_texture": ("BOOLEAN", {"default":True}),
-                "blend_exponent": ("FLOAT", {"default": 2.0, "min": 0.5, "max": 8.0, "step": 0.5}),
-                "ortho_scale": ("FLOAT", {"default": 1.0, "min": 0.05, "max": 10.0, "step": 0.01}),
+                "blend_exponent": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 99.0, "step": 0.1}),
+                "ortho_scale": ("FLOAT", {"default": 1.1, "min": 0.05, "max": 10.0, "step": 0.01}),
                 "norm_size": ("FLOAT",{"default":1.15, "min":0.0, "max":9.99, "step":0.01}),
                 "fill_holes": ("BOOLEAN",{"default":True}),
-                "max_hole_size": ("INT",{"default":10,"min":0,"max":99999,"step":1}),
+                "max_hole_size": ("INT",{"default":20,"min":0,"max":99999,"step":1}),
+                "use_metallic": ("BOOLEAN",{"default":True}),
+                "depth_eps": ("FLOAT",{"default":0.0100,"min":0.0001,"max":1.0000,"step":0.0001}),
+                "mesh_cluster_threshold_cone_half_angle_rad": ("FLOAT",{"default":60,"min":1,"max":179,"step":1}),
+                "add_alpha_channel": ("BOOLEAN",{"default":False}),
             },
             "optional": {
                 # Standard views
@@ -312,10 +316,17 @@ class VisualBrunoToolsProjectionMultiViewTexturing:
                 "right_image": ("IMAGE",),   # az=270, el=0
                 "top_image": ("IMAGE",),     # az=0, el=90
                 "bottom_image": ("IMAGE",),  # az=0, el=-90
+                "front_weight": ("FLOAT",{"default":1.000,"min":0.001,"max":1.000,"step":0.001}),
+                "back_weight": ("FLOAT",{"default":1.000,"min":0.001,"max":1.000,"step":0.001}),
+                "left_weight": ("FLOAT",{"default":0.010,"min":0.001,"max":1.000,"step":0.001}),
+                "right_weight": ("FLOAT",{"default":0.010,"min":0.001,"max":1.000,"step":0.001}),
+                "top_weight": ("FLOAT",{"default":0.010,"min":0.001,"max":1.000,"step":0.001}),
+                "bottom_weight": ("FLOAT",{"default":0.010,"min":0.001,"max":1.000,"step":0.001}),
                 # Custom views
                 "custom_images": ("IMAGE",),
                 "custom_azimuths": ("STRING", {"default": ""}),
                 "custom_elevations": ("STRING", {"default": ""}),
+                "custom_weights": ("STRING", {"default": ""}),
                 "camera_config": ("HY3DCAMERA",),
             }
         }
@@ -336,6 +347,10 @@ class VisualBrunoToolsProjectionMultiViewTexturing:
         norm_size,
         fill_holes,
         max_hole_size,
+        use_metallic,
+        depth_eps,
+        mesh_cluster_threshold_cone_half_angle_rad,
+        add_alpha_channel,
         baseColorTexture = None,
         front_image=None,
         back_image=None,
@@ -343,9 +358,16 @@ class VisualBrunoToolsProjectionMultiViewTexturing:
         right_image=None,
         top_image=None,
         bottom_image=None,
+        front_weight=None,
+        back_weight=None,
+        left_weight=None,
+        right_weight=None,
+        top_weight=None,
+        bottom_weight=None,
         custom_images=None,
         custom_azimuths="",
         custom_elevations="",
+        custom_weights="",
         camera_config = None
     ):
         from ..scripts.texture_projection_multiview import texture_mesh_with_multiview
@@ -354,39 +376,44 @@ class VisualBrunoToolsProjectionMultiViewTexturing:
         images = []
         azimuths = []
         elevations = []
+        weights = []
         
         # Standard views with their camera angles
         standard_views = [
-            (front_image, 0, 0, "front"),
-            (back_image, 180, 0, "back"),
-            (left_image, 90, 0, "left"),
-            (right_image, 270, 0, "right"),
-            (top_image, 0, 90, "top"),
-            (bottom_image, 0, -90, "bottom"),
+            (front_image, 0, 0, "front", front_weight),
+            (back_image, 180, 0, "back", back_weight),
+            (left_image, 90, 0, "left", left_weight),
+            (right_image, 270, 0, "right", right_weight),
+            (top_image, 0, 90, "top", top_weight),
+            (bottom_image, 0, -90, "bottom", bottom_weight),
         ]
         
-        for img, az, el, name in standard_views:
+        for img, az, el, name, w in standard_views:
             if img is not None:
                 images.append(self._tensor_to_pil(img))
                 azimuths.append(az)
                 elevations.append(el)
-                print(f"[MultiView] Added {name} view (az={az}, el={el})")
+                weights.append(w)
+                print(f"[MultiView] Added {name} view (az={az}, el={el}, w={w})")
         
         # Custom views
         if custom_images is not None:
             custom_az_list = self._parse_angles(custom_azimuths)
             custom_el_list = self._parse_angles(custom_elevations)
+            custom_w_list = self._parse_angles(custom_weights)
             
             if custom_az_list and custom_el_list:
-                num_custom = min(len(custom_az_list), len(custom_el_list), int(custom_images.shape[0]))
+                num_custom = min(len(custom_az_list), len(custom_el_list), int(custom_images.shape[0]), len(custom_w_list))
                 for i in range(num_custom):
                     images.append(self._tensor_to_pil(custom_images[i:i+1]))
                     azimuths.append(custom_az_list[i])
                     elevations.append(custom_el_list[i])
+                    weights.append(custom_w_list[i])
                     print(f"[MultiView] Added custom view {i+1} (az={custom_az_list[i]}, el={custom_el_list[i]})")
             elif camera_config:
                 selected_camera_azims = camera_config["selected_camera_azims"]
                 selected_camera_elevs = camera_config["selected_camera_elevs"]
+                selected_view_weights = camera_config["selected_view_weights"]
                 #ortho_scale = camera_config["ortho_scale"]             
 
                 num_custom = min(len(selected_camera_azims), len(selected_camera_elevs), int(custom_images.shape[0]))
@@ -394,7 +421,8 @@ class VisualBrunoToolsProjectionMultiViewTexturing:
                     images.append(self._tensor_to_pil(custom_images[i:i+1]))
                     azimuths.append(selected_camera_azims[i])
                     elevations.append(selected_camera_elevs[i])
-                    print(f"[MultiView] Added custom view {i+1} (az={selected_camera_azims[i]}, el={selected_camera_elevs[i]})")                
+                    weights.append(selected_view_weights[i])
+                    print(f"[MultiView] Added custom view {i+1} (az={selected_camera_azims[i]}, el={selected_camera_elevs[i]}, w={selected_view_weights[i]})")                
         
         if len(images) == 0:
             raise ValueError("No input images provided! Please connect at least one image.")
@@ -408,13 +436,18 @@ class VisualBrunoToolsProjectionMultiViewTexturing:
             images,
             azimuths,
             elevations,
+            weights,
             texture_size=texture_size,
+            mesh_cluster_threshold_cone_half_angle_rad=mesh_cluster_threshold_cone_half_angle_rad,
             blend_exponent=blend_exponent,
             ortho_scale=ortho_scale,
             blend_texture=blend_texture,
             fill_holes=fill_holes,
             norm_size=norm_size,
-            max_hole_size=max_hole_size
+            max_hole_size=max_hole_size,
+            use_metallic=use_metallic,
+            depth_eps=depth_eps,
+            add_alpha_channel=add_alpha_channel
         )
         
         return (trimesh_obj, pil2tensor(base_color), pil2tensor(mr))
