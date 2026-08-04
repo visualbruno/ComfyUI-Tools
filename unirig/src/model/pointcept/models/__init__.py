@@ -1,1 +1,0 @@
-from .PTv3Object import PointTransformerV3Object
