@@ -1,4 +1,9 @@
-python-box
-lightning
-fast_simplification
-open3d
+trimesh
+rembg
+
+# Used only for Projection
+#opencv-python
+#tqdm
+#git+https://github.com/NVlabs/nvdiffrast
+#custom windows version of cumesh: https://github.com/visualbruno/CuMesh
+
