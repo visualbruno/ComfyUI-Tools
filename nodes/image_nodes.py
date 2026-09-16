@@ -1,5 +1,5 @@
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageSequence, ImageOps
 import os
 import torch
 import torch.nn.functional as F
@@ -29,7 +29,7 @@ def tensor2pil(image: torch.Tensor) -> Image.Image:
         arr = (t.numpy() * 255.0).clip(0, 255).astype(np.uint8)
         return Image.fromarray(arr)
 
-    raise TypeError(f"tensor2pil expected torch.Tensor, got {type(image)}")  
+    raise TypeError(f"tensor2pil expected torch.Tensor, got {type(image)}") 
     
 def convert_tensor_images_to_pil(images):
     pil_array = []
