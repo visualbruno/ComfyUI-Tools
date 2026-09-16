@@ -1,0 +1,19 @@
+[project]
+name = "tools"
+description = ""
+version = "1.0.0"
+
+dependencies = ["trimesh", "rembg", "tqdm", "opencv-python", "nvdiffrast", "cumesh"]
+
+[project.urls]
+Repository = "https://github.com/visualbruno/ComfyUI-Tools"
+#  Used by Comfy Registry https://registry.comfy.org
+Documentation = "https://github.com/visualbruno/ComfyUI-Tools/wiki"
+"Bug Tracker" = "https://github.com/visualbruno/ComfyUI-Tools/issues"
+
+[tool.comfy]
+PublisherId = "visualbruno"
+DisplayName = "ComfyUI-Tools"
+Icon = ""
+includes = [] 
+# "requires-comfyui" = ">=1.0.0"  # ComfyUI version compatibility
