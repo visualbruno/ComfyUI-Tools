@@ -48,6 +48,7 @@ class VisualBrunoToolsCropImageAlpha:
                 "padding": ("INT",{"default":0,"min":0,"max":1024}),
                 "remove_background": ("BOOLEAN",{"default":False}),
                 "max_size": ("INT",{"default":2048,"min":512,"max":8192,"step":128}),
+                "square": ("BOOLEAN",{"defaut":True}),
             }
         }
     RETURN_TYPES = ("IMAGE",)
@@ -56,7 +57,7 @@ class VisualBrunoToolsCropImageAlpha:
     FUNCTION = "process"
     CATEGORY = "VisualBrunoTools/Image"
 
-    def process(self, image, padding, remove_background, max_size):
+    def process(self, image, padding, remove_background, max_size, square = True):
         if image.ndim == 3:
             image = tensor2pil(image)
             
@@ -64,7 +65,10 @@ class VisualBrunoToolsCropImageAlpha:
                 from rembg import remove
                 image = remove(image)
             
-            image = self.preprocess_image(image, max_size)
+            if square:
+                image = self.preprocess_image_square(image, max_size)
+            else:
+                image = self.preprocess_image(image, max_size)
             
             if padding>0:
                 border = (int(padding), int(padding), int(padding), int(padding))
@@ -80,7 +84,10 @@ class VisualBrunoToolsCropImageAlpha:
                     from rembg import remove
                     img = remove(img)
                 
-                img = self.preprocess_image(img, max_size)
+                if square:
+                    img = self.preprocess_image_square(img, max_size)
+                else:
+                    img = self.preprocess_image(img, max_size)
                 
                 if padding>0:
                     border = (int(padding), int(padding), int(padding), int(padding))
@@ -127,7 +134,7 @@ class VisualBrunoToolsCropImageAlpha:
         raise ValueError(f"Unsupported image mode: {img.mode}")         
 
 
-    def preprocess_image(self, input: Image.Image, max_res) -> Image.Image:
+    def preprocess_image_square(self, input: Image.Image, max_res) -> Image.Image:
         """
         Preprocess the input image.
         """
@@ -164,3 +171,43 @@ class VisualBrunoToolsCropImageAlpha:
         output = output[:, :, :3] * output[:, :, 3:4]
         output = Image.fromarray((output * 255).astype(np.uint8))
         return output    
+        
+    def preprocess_image(self, input: Image.Image, max_res) -> Image.Image:
+        """
+        Preprocess the input image by cropping tightly around non-transparent pixels.
+        """
+        # Check for alpha channel
+        has_alpha = False
+        if input.mode == 'RGBA':
+            alpha = np.array(input)[:, :, 3]
+            if not np.all(alpha == 255):
+                has_alpha = True
+
+        # Downscale if exceeding max_res
+        max_size = max(input.size)
+        scale = min(1, max_res / max_size)
+        if scale < 1:
+            input = input.resize((int(input.width * scale), int(input.height * scale)), Image.Resampling.LANCZOS)
+
+        output = input
+        output_np = np.array(output)
+        alpha = output_np[:, :, 3]
+        
+        # Locate pixels with alpha above threshold (> 80% opacity)
+        bbox_coords = np.argwhere(alpha > 0.8 * 255)
+        
+        if bbox_coords.size > 0:
+            # argwhere returns (row, col) -> (y, x)
+            y_min, x_min = np.min(bbox_coords, axis=0)
+            y_max, x_max = np.max(bbox_coords, axis=0)
+            
+            # PIL crop box format: (left, upper, right, lower)
+            bbox = (x_min, y_min, x_max + 1, y_max + 1)
+            output = output.crop(bbox)
+        
+        # Apply alpha mask over RGB channels
+        output_np = np.array(output).astype(np.float32) / 255.0
+        rgb = output_np[:, :, :3] * output_np[:, :, 3:4]
+        output = Image.fromarray((rgb * 255).astype(np.uint8))
+        
+        return output      
