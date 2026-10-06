@@ -6,6 +6,8 @@ import os
 import sys
 import copy
 import torch
+from comfy_api.latest import Types
+from .image_nodes import pil2tensor
 
 file_directory = os.path.dirname(os.path.abspath(__file__))
 libs_directory = os.path.join(os.path.dirname(os.path.dirname(__file__)),'libs')
@@ -621,5 +623,94 @@ class VisualBrunoToolsMeshSimplifyTrellis2:
         
         mesh_copy.faces = torch.from_numpy(new_faces).float()
         mesh_copy.vertices = torch.from_numpy(new_vertices).float()
-        
-        return (mesh_copy,)        
+
+        return (mesh_copy,)
+
+class VisualBrunoToolsTrimeshToMesh:
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "trimesh": ("TRIMESH",),
+            },
+        }
+
+    RETURN_TYPES = ("MESH",)
+    RETURN_NAMES = ("mesh",)
+    FUNCTION = "process"
+    CATEGORY = "VisualBrunoTools/3d"
+
+    def process(self, trimesh):
+        vertices = torch.from_numpy(np.asarray(trimesh.vertices, dtype=np.float32))[None]
+        faces = torch.from_numpy(np.asarray(trimesh.faces, dtype=np.int32))[None]
+        normals = torch.from_numpy(np.asarray(trimesh.vertex_normals, dtype=np.float32))[None]
+        uvs = None
+        vertex_colors = None
+        texture = None
+        metallic_roughness = None
+        normal_map = None
+        emissive = None
+        occlusion_in_mr = False
+        material_info = None
+
+        visual = trimesh.visual
+        if visual.kind == "vertex":
+            vertex_colors = torch.from_numpy(visual.vertex_colors.astype(np.float32) / 255.0)[None]
+        elif visual.kind == "texture":
+            if visual.uv is not None:
+                # trimesh stores V flipped (OpenGL), MESH uses glTF convention
+                uv = np.array(visual.uv, dtype=np.float32)
+                uv[:, 1] = 1.0 - uv[:, 1]
+                uvs = torch.from_numpy(uv)[None]
+            if "color" in visual.vertex_attributes:
+                vertex_colors = torch.from_numpy(np.asarray(visual.vertex_attributes["color"], dtype=np.float32) / 255.0)[None]
+
+            material = visual.material
+            if isinstance(material, Trimesh.visual.material.SimpleMaterial):
+                material = material.to_pbr()
+            if material.baseColorTexture is not None:
+                texture = pil2tensor(material.baseColorTexture.convert("RGB"))
+            if material.normalTexture is not None:
+                normal_map = pil2tensor(material.normalTexture.convert("RGB"))
+            if material.emissiveTexture is not None:
+                emissive = pil2tensor(material.emissiveTexture.convert("RGB"))
+
+            mr_image = material.metallicRoughnessTexture.convert("RGB") if material.metallicRoughnessTexture is not None else None
+            if material.occlusionTexture is not None:
+                # MESH only carries occlusion packed into R of metallic_roughness (ORM)
+                occlusion = material.occlusionTexture.convert("RGB")
+                if mr_image is None:
+                    mr_image = Image.new("RGB", occlusion.size, (255, 255, 255))
+                _, g, b = mr_image.split()
+                mr_image = Image.merge("RGB", (occlusion.resize(mr_image.size).getchannel("R"), g, b))
+                occlusion_in_mr = True
+            if mr_image is not None:
+                metallic_roughness = pil2tensor(mr_image)
+
+            material_info = {
+                "metallic_factor": 1.0 if material.metallicFactor is None else float(material.metallicFactor),
+                "roughness_factor": 1.0 if material.roughnessFactor is None else float(material.roughnessFactor),
+                "double_sided": bool(material.doubleSided),
+            }
+            if material.baseColorFactor is not None:
+                material_info["base_color_factor"] = [float(c) / 255.0 for c in material.baseColorFactor]
+            if material.emissiveFactor is not None and any(c > 0.0 for c in material.emissiveFactor):
+                material_info["emissive_factor"] = [float(c) for c in material.emissiveFactor]
+
+        print(f"Trimesh to MESH: {vertices.shape[1]} vertices, {faces.shape[1]} faces")
+
+        mesh = Types.MESH(
+            vertices=vertices,
+            faces=faces,
+            uvs=uvs,
+            vertex_colors=vertex_colors,
+            normals=normals,
+            texture=texture,
+            metallic_roughness=metallic_roughness,
+            normal_map=normal_map,
+            emissive=emissive,
+            occlusion_in_mr=occlusion_in_mr,
+            material=material_info,
+        )
+        return (mesh,)

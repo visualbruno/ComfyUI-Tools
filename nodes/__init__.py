@@ -9,6 +9,7 @@ from .threed_nodes import (
     VisualBrunoToolsProjectionMultiViewTexturing,
     VisualBrunoToolsMeshSimplify,
     VisualBrunoToolsMeshSimplifyTrellis2,
+    VisualBrunoToolsTrimeshToMesh,
 )
 
 from .image_nodes import (
@@ -24,7 +25,8 @@ NODE_CLASS_MAPPINGS = {
     "VisualBrunoToolsProjectionMultiViewTexturing": VisualBrunoToolsProjectionMultiViewTexturing,
     "VisualBrunoToolsMeshSimplify": VisualBrunoToolsMeshSimplify,
     "VisualBrunoToolsMeshSimplifyTrellis2": VisualBrunoToolsMeshSimplifyTrellis2,
-    
+    "VisualBrunoToolsTrimeshToMesh": VisualBrunoToolsTrimeshToMesh,
+
     # Image Nodes
     "VisualBrunoToolsCropImageAlpha": VisualBrunoToolsCropImageAlpha,    
 }
@@ -37,7 +39,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "VisualBrunoToolsProjectionMultiViewTexturing": "3d - Projection MultiView Texturing",
     "VisualBrunoToolsMeshSimplify": "3d - Simplify Trimesh using meshoptimizer",
     "VisualBrunoToolsMeshSimplifyTrellis2": "3d - Simplify Trellis2 Mesh using mesh optimizer",
-    
+    "VisualBrunoToolsTrimeshToMesh": "3d - Trimesh to Mesh",
+
     # Blender Nodes
     "VisualBrunoToolsCropImageAlpha": "Image - Crop Image with Alpha",    
 }
